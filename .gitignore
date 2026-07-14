@@ -5,7 +5,17 @@ __pycache__/
 data/raw/
 data/processed/
 
-models/
-
 .vscode/
 .ipynb_checkpoints/
+
+# model weights & checkpoints
+*.pth
+*.save
+checkpoint_ep*.pth
+microgrid_dqn.pth
+lstm_model.pth
+lstm_scaler.save
+
+# generated outputs
+microgrid_data.csv
+microgrid_results.png
