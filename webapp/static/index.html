@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SUSTAIN_AI — Microgrid Control Center</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    color-scheme: dark;
+    --page:        #0d0d0d;
+    --surface:     #1a1a19;
+    --surface-2:   #222221;
+    --ink:         #ffffff;
+    --ink-2:       #c3c2b7;
+    --muted:       #898781;
+    --grid:        #2c2c2a;
+    --baseline:    #383835;
+    --border:      rgba(255,255,255,0.10);
+    --good:        #0ca30c;
+    --bad:         #d03b3b;
+    /* series — color follows the entity everywhere */
+    --c-rl:        #3987e5;   /* RL agent  */
+    --c-bl:        #c98500;   /* baseline  */
+    --c-demand:    #9085e9;   /* demand    */
+    --c-solar:     #199e70;   /* solar     */
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--page); color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 14px; line-height: 1.45;
+    padding: 28px clamp(16px, 4vw, 48px) 48px;
+  }
+
+  /* ── Header ─────────────────────────────────────────────── */
+  header { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 8px; }
+  .brand { display: flex; align-items: baseline; gap: 10px; }
+  .brand h1 { font-size: 18px; font-weight: 650; margin: 0; letter-spacing: -0.01em; }
+  .brand .tag { font-size: 12px; color: var(--muted); }
+  .live-pill {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-size: 12px; font-weight: 600; color: var(--ink-2);
+    border: 1px solid var(--border); border-radius: 999px; padding: 4px 12px;
+  }
+  .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--baseline); }
+  .live-pill.on .live-dot { background: var(--good); animation: pulse 1.4s ease infinite; }
+  @keyframes pulse { 50% { opacity: 0.35; } }
+  .sub { color: var(--muted); font-size: 13px; margin: 0 0 20px; }
+
+  /* ── Controls ───────────────────────────────────────────── */
+  .controls {
+    margin-left: auto; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  }
+  .field { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--muted); }
+  .field input {
+    width: 64px; background: var(--surface); color: var(--ink);
+    border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px;
+    font: inherit; font-variant-numeric: tabular-nums;
+  }
+  .field input:focus { outline: none; border-color: var(--c-rl); }
+  .btn {
+    font: inherit; font-weight: 600; font-size: 13px; cursor: pointer;
+    border-radius: 8px; padding: 8px 18px; border: 1px solid transparent;
+    transition: opacity .15s;
+  }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .btn-primary { background: var(--c-rl); color: #06101f; }
+  .btn-ghost   { background: transparent; color: var(--ink-2); border-color: var(--border); }
+
+  .progress { height: 3px; background: var(--surface-2); border-radius: 2px; overflow: hidden; margin-bottom: 24px; }
+  .progress > div { height: 100%; width: 0%; background: var(--c-rl); transition: width .25s linear; }
+
+  /* ── Stat tiles ─────────────────────────────────────────── */
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; margin-bottom: 22px; }
+  .tile {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px 18px 14px;
+  }
+  .tile .label { font-size: 12px; color: var(--muted); margin-bottom: 8px; display: flex; align-items: center; gap: 7px; }
+  .key { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+  .tile .value { font-size: 26px; font-weight: 650; letter-spacing: -0.01em; }
+  .tile .delta { font-size: 12px; margin-top: 5px; color: var(--muted); }
+  .delta b { font-weight: 650; }
+  .delta .up-good   { color: var(--good); }
+  .delta .up-bad    { color: var(--bad); }
+  .tile.hero { background: linear-gradient(160deg, rgba(57,135,229,0.14), rgba(57,135,229,0.03)); border-color: rgba(57,135,229,0.35); }
+  .tile.hero .value { font-size: 34px; }
+
+  /* ── Panels & charts ────────────────────────────────────── */
+  .row { display: grid; gap: 14px; margin-bottom: 14px; }
+  .row.two { grid-template-columns: 1fr 1fr; }
+  .row.main { grid-template-columns: 2fr 1fr; }
+  @media (max-width: 980px) { .row.two, .row.main { grid-template-columns: 1fr; } }
+
+  .panel {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px 18px;
+  }
+  .panel h2 { font-size: 13px; font-weight: 600; color: var(--ink-2); margin: 0 0 2px; }
+  .panel .hint { font-size: 11.5px; color: var(--muted); margin: 0 0 10px; }
+  .chart-wrap { position: relative; height: 240px; }
+  .chart-wrap.tall { height: 280px; }
+
+  /* ── Action log ─────────────────────────────────────────── */
+  .log {
+    height: 280px; overflow-y: auto;
+    font-variant-numeric: tabular-nums; font-size: 12px;
+  }
+  .log::-webkit-scrollbar { width: 8px; }
+  .log::-webkit-scrollbar-thumb { background: var(--baseline); border-radius: 4px; }
+  .log-head, .log-row {
+    display: grid; grid-template-columns: 64px 1fr 1fr; gap: 8px;
+    padding: 5px 4px; align-items: center;
+  }
+  .log-head { position: sticky; top: 0; background: var(--surface); color: var(--muted); font-size: 11px; border-bottom: 1px solid var(--grid); }
+  .log-row { border-bottom: 1px solid var(--grid); color: var(--ink-2); }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 550;
+    color: var(--ink-2);
+  }
+  .chip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--dot, var(--muted)); }
+
+  /* ── Result banner ──────────────────────────────────────── */
+  .banner {
+    display: none; margin-top: 8px; padding: 18px 22px; border-radius: 12px;
+    background: var(--surface); border: 1px solid var(--border); font-size: 14px;
+  }
+  .banner.show { display: block; }
+  .banner .headline { font-size: 17px; font-weight: 650; margin-bottom: 6px; }
+  .banner .detail { color: var(--ink-2); }
+  .banner.win  { border-color: rgba(12,163,12,0.45); background: linear-gradient(160deg, rgba(12,163,12,0.10), transparent); }
+  .banner.loss { border-color: rgba(208,59,59,0.45); background: linear-gradient(160deg, rgba(208,59,59,0.10), transparent); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <h1>SUSTAIN_AI</h1>
+    <span class="tag">Microgrid control center</span>
+  </div>
+  <span class="live-pill" id="livePill"><span class="live-dot"></span><span id="liveText">Standby</span></span>
+  <div class="controls">
+    <label class="field">Days <input id="nDays" type="number" value="5" min="1" max="60"></label>
+    <label class="field">ms / hour <input id="speed" type="number" value="200" min="50" max="3000"></label>
+    <button class="btn btn-primary" id="startBtn" onclick="startSim()">Start simulation</button>
+    <button class="btn btn-ghost" id="stopBtn" onclick="stopSim()" disabled>Stop</button>
+  </div>
+</header>
+<p class="sub">Deep-RL dispatch agent vs rule-based baseline · hour-by-hour on real ASHRAE building data</p>
+
+<div class="progress"><div id="progressBar"></div></div>
+
+<div class="tiles">
+  <div class="tile hero">
+    <div class="label">Cost savings vs baseline</div>
+    <div class="value" id="heroSavings">—</div>
+    <div class="delta" id="heroSub">agent has not run yet</div>
+  </div>
+  <div class="tile">
+    <div class="label"><span class="key" style="background:var(--c-rl)"></span>RL agent · total cost</div>
+    <div class="value" id="rlCost">$0</div>
+    <div class="delta" id="rlCostDelta">&nbsp;</div>
+  </div>
+  <div class="tile">
+    <div class="label"><span class="key" style="background:var(--c-bl)"></span>Baseline · total cost</div>
+    <div class="value" id="blCost">$0</div>
+    <div class="delta">rule-based heuristic</div>
+  </div>
+  <div class="tile">
+    <div class="label"><span class="key" style="background:var(--c-rl)"></span>RL agent · CO₂</div>
+    <div class="value" id="rlEmit">0 kg</div>
+    <div class="delta" id="emitDelta">&nbsp;</div>
+  </div>
+</div>
+
+<div class="row main">
+  <div class="panel">
+    <h2>Cumulative cost</h2>
+    <p class="hint">Running total, RL agent vs baseline — the gap is the money saved</p>
+    <div class="chart-wrap tall"><canvas id="costChart"></canvas></div>
+  </div>
+  <div class="panel">
+    <h2>Dispatch log</h2>
+    <p class="hint">Most recent hour first</p>
+    <div class="log" id="logCard">
+      <div class="log-head"><span>Time</span><span>RL agent</span><span>Baseline</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="row two">
+  <div class="panel">
+    <h2>Site energy</h2>
+    <p class="hint">Building demand and on-site solar (kW)</p>
+    <div class="chart-wrap"><canvas id="energyChart"></canvas></div>
+  </div>
+  <div class="panel">
+    <h2>Battery state of charge</h2>
+    <p class="hint">How each policy positions the battery (%)</p>
+    <div class="chart-wrap"><canvas id="socChart"></canvas></div>
+  </div>
+</div>
+
+<div class="banner" id="banner">
+  <div class="headline" id="bannerHead"></div>
+  <div class="detail" id="bannerDetail"></div>
+</div>
+
+<script>
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const C = {
+  rl: css('--c-rl'), bl: css('--c-bl'), demand: css('--c-demand'), solar: css('--c-solar'),
+  ink2: css('--ink-2'), muted: css('--muted'), grid: css('--grid'), surface: css('--surface'),
+};
+const fmtMoney = (v) => '$' + (v >= 1e6 ? (v/1e6).toFixed(2) + 'M' : v >= 1e4 ? (v/1e3).toFixed(1) + 'K' : v.toLocaleString(undefined, {maximumFractionDigits: 0}));
+const fmtKg    = (v) => (v >= 1e6 ? (v/1e6).toFixed(2) + 'M' : v >= 1e4 ? (v/1e3).toFixed(1) + 'K' : v.toLocaleString(undefined, {maximumFractionDigits: 0})) + ' kg';
+
+Chart.defaults.font.family = 'system-ui, -apple-system, "Segoe UI", sans-serif';
+Chart.defaults.font.size = 11;
+Chart.defaults.color = C.muted;
+
+function baseOptions(yTitle, yMax) {
+  return {
+    responsive: true, maintainAspectRatio: false, animation: false,
+    interaction: { mode: 'index', intersect: false },
+    scales: {
+      x: {
+        ticks: { color: C.muted, maxTicksLimit: 10, maxRotation: 0 },
+        grid: { display: false }, border: { color: css('--baseline') },
+      },
+      y: {
+        ticks: { color: C.muted, callback: v => v.toLocaleString() },
+        grid: { color: C.grid, lineWidth: 1 }, border: { display: false },
+        title: { display: true, text: yTitle, color: C.muted, font: { size: 10.5 } },
+        beginAtZero: true, ...(yMax ? { max: yMax } : {}),
+      },
+    },
+    plugins: {
+      legend: { labels: { color: C.ink2, boxWidth: 14, boxHeight: 3, font: { size: 11.5 } } },
+      tooltip: {
+        backgroundColor: '#222221', borderColor: 'rgba(255,255,255,0.12)', borderWidth: 1,
+        titleColor: '#ffffff', bodyColor: C.ink2, padding: 10, cornerRadius: 8,
+        boxWidth: 8, boxHeight: 8, usePointStyle: true,
+      },
+    },
+  };
+}
+
+function lineDS(label, color, opts = {}) {
+  return {
+    label, data: [],
+    borderColor: color, backgroundColor: 'transparent',
+    borderWidth: 2, borderJoinStyle: 'round', borderCapStyle: 'round',
+    pointRadius: 0, pointHoverRadius: 4.5, pointHoverBackgroundColor: color,
+    pointHoverBorderColor: C.surface, pointHoverBorderWidth: 2,
+    tension: 0.3, ...opts,
+  };
+}
+
+const costChart = new Chart(document.getElementById('costChart'), {
+  type: 'line',
+  data: { labels: [], datasets: [
+    lineDS('RL agent', C.rl),
+    lineDS('Baseline', C.bl, { borderDash: [5, 4] }),
+  ]},
+  options: baseOptions('cumulative cost ($)'),
+});
+
+const energyChart = new Chart(document.getElementById('energyChart'), {
+  type: 'line',
+  data: { labels: [], datasets: [
+    lineDS('Demand', C.demand),
+    lineDS('Solar', C.solar, { fill: true, backgroundColor: 'rgba(25,158,112,0.10)' }),
+  ]},
+  options: baseOptions('kW'),
+});
+
+const socChart = new Chart(document.getElementById('socChart'), {
+  type: 'line',
+  data: { labels: [], datasets: [
+    lineDS('RL agent', C.rl),
+    lineDS('Baseline', C.bl, { borderDash: [5, 4] }),
+  ]},
+  options: baseOptions('state of charge (%)', 100),
+});
+
+let ws = null;
+
+function setLive(on, text) {
+  document.getElementById('livePill').classList.toggle('on', on);
+  document.getElementById('liveText').textContent = text;
+}
+
+function resetAll() {
+  for (const ch of [costChart, energyChart, socChart]) {
+    ch.data.labels = [];
+    ch.data.datasets.forEach(d => d.data = []);
+    ch.update('none');
+  }
+  document.getElementById('logCard').querySelectorAll('.log-row').forEach(r => r.remove());
+  document.getElementById('banner').className = 'banner';
+  document.getElementById('progressBar').style.width = '0%';
+  document.getElementById('heroSavings').textContent = '—';
+  document.getElementById('heroSub').textContent = 'simulation running…';
+  document.getElementById('rlCost').textContent = '$0';
+  document.getElementById('blCost').textContent = '$0';
+  document.getElementById('rlEmit').textContent = '0 kg';
+  document.getElementById('rlCostDelta').innerHTML = '&nbsp;';
+  document.getElementById('emitDelta').innerHTML = '&nbsp;';
+}
+
+function startSim() {
+  const nDays = parseInt(document.getElementById('nDays').value) || 5;
+  const speed = parseInt(document.getElementById('speed').value) || 200;
+
+  resetAll();
+  document.getElementById('startBtn').disabled = true;
+  document.getElementById('stopBtn').disabled = false;
+  setLive(true, 'Connecting…');
+
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws/simulate`);
+  let totalSteps = 1;
+
+  ws.onopen = () => {
+    ws.send(JSON.stringify({ n_days: nDays, speed_ms: speed }));
+    setLive(true, 'Live');
+  };
+
+  ws.onmessage = (ev) => {
+    const msg = JSON.parse(ev.data);
+
+    if (msg.type === 'start') {
+      totalSteps = msg.total_steps;
+
+    } else if (msg.type === 'tick') {
+      const label = `d${Math.floor(msg.step / 24) + 1} · ${String(msg.hour).padStart(2, '0')}:00`;
+
+      costChart.data.labels.push(label);
+      costChart.data.datasets[0].data.push(msg.rl.total_cost);
+      costChart.data.datasets[1].data.push(msg.baseline.total_cost);
+      costChart.update('none');
+
+      energyChart.data.labels.push(label);
+      energyChart.data.datasets[0].data.push(msg.demand);
+      energyChart.data.datasets[1].data.push(msg.solar);
+      energyChart.update('none');
+
+      socChart.data.labels.push(label);
+      socChart.data.datasets[0].data.push(msg.rl.battery_soc);
+      socChart.data.datasets[1].data.push(msg.baseline.battery_soc);
+      socChart.update('none');
+
+      // tiles
+      const saved = msg.baseline.total_cost - msg.rl.total_cost;
+      const pct   = msg.baseline.total_cost > 0 ? (saved / msg.baseline.total_cost * 100) : 0;
+      document.getElementById('heroSavings').textContent = fmtMoney(Math.abs(saved));
+      document.getElementById('heroSub').innerHTML = saved >= 0
+        ? `<b class="up-good">${pct.toFixed(1)}% cheaper</b> than baseline so far`
+        : `<b class="up-bad">${Math.abs(pct).toFixed(1)}% more expensive</b> than baseline so far`;
+      document.getElementById('rlCost').textContent = fmtMoney(msg.rl.total_cost);
+      document.getElementById('blCost').textContent = fmtMoney(msg.baseline.total_cost);
+      document.getElementById('rlEmit').textContent = fmtKg(msg.rl.total_emission);
+      document.getElementById('rlCostDelta').innerHTML =
+        saved >= 0 ? `<b class="up-good">−${fmtMoney(saved)}</b> vs baseline`
+                   : `<b class="up-bad">+${fmtMoney(-saved)}</b> vs baseline`;
+      const eDelta = msg.baseline.total_emission - msg.rl.total_emission;
+      document.getElementById('emitDelta').innerHTML =
+        eDelta >= 0 ? `<b class="up-good">−${fmtKg(eDelta)}</b> vs baseline`
+                    : `<b class="up-bad">+${fmtKg(-eDelta)}</b> vs baseline`;
+
+      document.getElementById('progressBar').style.width =
+        Math.min(100, (msg.step / totalSteps) * 100) + '%';
+
+      // log
+      const log = document.getElementById('logCard');
+      const row = document.createElement('div');
+      row.className = 'log-row';
+      row.innerHTML =
+        `<span style="color:var(--muted)">${label}</span>` +
+        `<span class="chip" style="--dot:${C.rl}">${msg.rl.action_name}</span>` +
+        `<span class="chip" style="--dot:${C.bl}">${msg.baseline.action_name}</span>`;
+      log.insertBefore(row, log.children[1] || null);
+      while (log.children.length > 80) log.removeChild(log.lastChild);
+
+    } else if (msg.type === 'done') {
+      setLive(false, 'Complete');
+      document.getElementById('startBtn').disabled = false;
+      document.getElementById('stopBtn').disabled = true;
+      document.getElementById('progressBar').style.width = '100%';
+
+      const win = msg.cost_savings_pct >= 0;
+      const banner = document.getElementById('banner');
+      banner.className = 'banner show ' + (win ? 'win' : 'loss');
+      document.getElementById('bannerHead').textContent = win
+        ? `RL agent finished ${msg.cost_savings_pct}% cheaper than the baseline`
+        : `RL agent finished ${Math.abs(msg.cost_savings_pct)}% more expensive than the baseline`;
+      document.getElementById('bannerDetail').textContent =
+        `Cost — RL ${fmtMoney(msg.rl_total_cost)} vs baseline ${fmtMoney(msg.bl_total_cost)}.  ` +
+        `Emissions — RL ${fmtKg(msg.rl_total_emission)} vs baseline ${fmtKg(msg.bl_total_emission)} ` +
+        `(${msg.emission_savings_pct >= 0 ? msg.emission_savings_pct + '% lower' : Math.abs(msg.emission_savings_pct) + '% higher'}).`;
+
+    } else if (msg.type === 'error') {
+      setLive(false, 'Error');
+      document.getElementById('heroSub').textContent = msg.message;
+      document.getElementById('startBtn').disabled = false;
+      document.getElementById('stopBtn').disabled = true;
+    }
+  };
+
+  ws.onclose = () => {
+    document.getElementById('startBtn').disabled = false;
+    document.getElementById('stopBtn').disabled = true;
+    if (document.getElementById('liveText').textContent === 'Live') setLive(false, 'Stopped');
+  };
+}
+
+function stopSim() {
+  if (ws) ws.close();
+  setLive(false, 'Stopped');
+}
+</script>
+</body>
+</html>
