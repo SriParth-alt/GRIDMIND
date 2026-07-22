@@ -106,7 +106,7 @@ async def simulate(ws: WebSocket):
         while not done:
             vec        = state_to_vector(state_rl)
             rl_action  = agent.choose_action(vec)
-            bl_action  = _baseline_action(state_bl)
+            bl_action  = _baseline_action(state_bl, env_bl.price_low, env_bl.price_high)
 
             next_rl, _, done, info_rl = env_rl.step(rl_action)
             next_bl, _, _,    info_bl = env_bl.step(bl_action)

@@ -2,33 +2,38 @@
 
 A reinforcement-learning agent that manages the energy flow of a building microgrid —
 deciding every hour whether to draw from the grid, charge or discharge a battery, or
-run price arbitrage — trained and evaluated on **real building energy data** from the
-ASHRAE Great Energy Predictor dataset.
+run price arbitrage. **Every input is measured data**: real building demand (ASHRAE),
+real solar irradiance (NASA POWER), real day-ahead market prices (NYISO), and real
+hourly grid carbon intensity computed from NYISO's actual 2016 fuel mix.
 
-**Results (90-day evaluation on real building data):**
+**Results (90-day evaluation, all-real 2016 inputs):**
 
-| Policy | Total cost | vs do-nothing |
+| Policy | Energy cost | Savings vs do-nothing |
 |---|---|---|
-| Do nothing (grid only) | $3.01M | — |
-| Rule-based heuristic | $2.79M | −7.4% |
-| **RL agent (this project)** | **$2.67M** | **−11.5%** |
+| Do nothing (grid only) | 1.70M | — |
+| Rule-based heuristic | 1.68M | 0.99% |
+| **RL agent (this project)** | **1.62M** | **4.56%** |
 
-The RL agent beats the hand-written heuristic by **~4.9%** on cost — learned purely
-from experience, with no dispatch rules programmed in.
+The interesting result: on **real** market prices — where arbitrage spreads are thin —
+the hand-written heuristic captures barely 1% of value, while the learned agent finds
+**4.6× more**. The harder the market, the bigger RL's relative advantage.
 
 ## How it works
 
 ```
-ASHRAE building data ──► MicrogridEnv (13D state, battery physics) ──► Dueling DQN
-        │                        │                                        │
-   real demand,            savings-based reward                 charge / discharge /
-   solar, prices          (cost avoided vs no-op)               arbitrage decisions
+real demand + solar + prices + carbon ──► MicrogridEnv (13D state) ──► Dueling DQN
+   ASHRAE  NASA POWER  NYISO   NYISO           savings-based           charge / discharge /
+                                               reward                 arbitrage decisions
 ```
 
 - **Environment** ([environment/microgrid_env.py](environment/microgrid_env.py)) — hourly
   microgrid simulation: 500 kWh battery with charge/discharge efficiency and rate
-  limits, real demand from three ASHRAE buildings, physics-based solar (clear-sky
-  model attenuated by recorded cloud cover), time-of-use pricing, CO₂ tracking.
+  limits, hourly CO₂ tracking, and price thresholds derived from the data's own
+  percentiles (no magic numbers — works on any price regime).
+- **Real inputs** ([external_data.py](external_data.py)) — downloads and caches all
+  measured 2016 data: NASA POWER hourly irradiance → PV output, NYISO day-ahead
+  LBMP (N.Y.C. zone) → prices, NYISO 5-min fuel mix + per-fuel emission factors
+  → hourly grid carbon intensity. Free public sources, no API keys.
 - **State (13D)** — current demand/solar/price, 1-hour-ahead lookahead, battery SOC,
   time features, and a 24-hour planning horizon (peak demand, peak hour, average).
 - **Reward** — *savings-based*: the cost avoided relative to a "buy everything from
@@ -73,7 +78,8 @@ python main.py     # comparison, plots, and a 2-day demo
 ```
 ├── agents/dqn_agent.py          # Dueling DQN + PER agent
 ├── environment/microgrid_env.py # Microgrid simulation (battery physics, reward)
-├── ashrae_pipeline.py           # Real-data loader (demand, solar, pricing)
+├── ashrae_pipeline.py           # Data loader: ASHRAE demand + real inputs
+├── external_data.py             # NASA / NYISO downloaders (solar, prices, carbon)
 ├── data_generator.py            # Synthetic data generator (for experiments)
 ├── config.py                    # Every hyperparameter in one place
 ├── train_agent.py               # Training loop
@@ -84,10 +90,20 @@ python main.py     # comparison, plots, and a 2-day demo
     └── static/index.html
 ```
 
+## Data sources
+
+| Input | Source | Detail |
+|---|---|---|
+| Building demand | [ASHRAE GEPIII](https://www.kaggle.com/c/ashrae-energy-prediction/data) | 3 buildings, hourly meter readings, 2016 |
+| Solar | [NASA POWER](https://power.larc.nasa.gov/) | Measured hourly irradiance, NYC, → 150 kW array |
+| Prices | [NYISO](http://mis.nyiso.com/public/) | Day-ahead hourly LBMP, N.Y.C. zone, 2016 |
+| Carbon intensity | NYISO fuel mix | Real hourly kg CO₂/kWh from actual generation |
+
 ## Roadmap
 
-- [ ] Real day-ahead market prices (CAISO/ERCOT) instead of synthetic TOU
-- [ ] NREL/NASA measured solar irradiance
-- [ ] Hourly grid carbon intensity (charge when the grid is cleanest)
+- [x] Real day-ahead market prices (NYISO) instead of synthetic TOU
+- [x] NASA measured solar irradiance
+- [x] Hourly grid carbon intensity (charge when the grid is cleanest)
 - [ ] Continuous action space (variable charge/discharge rates)
 - [ ] Held-out building validation
+- [ ] Demand-charge modeling (peak-kW billing, where batteries earn most)
