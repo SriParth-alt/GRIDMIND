@@ -1,11 +1,26 @@
 venv/
+.venv/
 __pycache__/
 *.pyc
 
+# large raw datasets — download separately (see README)
+dataset/
 data/raw/
 data/processed/
 
-models/
-
+# editor / tooling config
 .vscode/
+.claude/
 .ipynb_checkpoints/
+
+# model weights & checkpoints
+*.pth
+*.save
+checkpoint_ep*.pth
+microgrid_dqn.pth
+lstm_model.pth
+lstm_scaler.save
+
+# generated outputs
+microgrid_data.csv
+microgrid_results.png

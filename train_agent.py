@@ -1,67 +1,75 @@
 """
 train_agent.py
-Training loop with:
-  - Realistic dataset from data_generator (60 days x 24 hours)
-  - 6-dimensional normalised state vector (includes next_price)
-  - Rolling reward window to track genuine improvement
-  - Plateau detection warning every 100 episodes
-  - Model saved to microgrid_dqn.pth after training completes
+Training loop: 1500-episode Dueling DQN with PER.
+
+Data source is controlled by USE_REAL_DATA flag:
+  False → synthetic data (generate_microgrid_data)
+  True  → real ASHRAE building data (load_ashrae_data)
+
+All hyperparameters live in config.py.
 """
 
 import torch
 import numpy as np
-import pandas as pd
 from collections import deque
 
+from config import (
+    STATE_BOUNDS, STATE_DIM, ACTION_DIM,
+    EPISODES, N_DAYS_TRAIN, DATA_SEED,
+    CHECKPOINT_FREQ, LOG_FREQ, REWARD_WINDOW,
+    PLATEAU_THRESH, MODEL_PATH,
+)
 from data_generator import generate_microgrid_data
+from ashrae_pipeline import load_ashrae_data
 from environment.microgrid_env import MicrogridEnv
 from agents.dqn_agent import DQNAgent
 
+# ── Toggle this to switch between data sources ────────────────────────────── #
+USE_REAL_DATA = True   # False = synthetic, True = ASHRAE real data
+# ─────────────────────────────────────────────────────────────────────────── #
 
-# ──────────────────────────────────────────────────────────────────────── #
-#  State normalisation                                                     #
-# ──────────────────────────────────────────────────────────────────────── #
-STATE_BOUNDS = {
-    "demand":      200.0,
-    "solar":       160.0,
-    "price":        25.0,
-    "next_price":   25.0,
-    "battery_soc": 100.0,
-    "hour":         24.0,
-}
 
 def state_to_vector(state: dict) -> np.ndarray:
     return np.array([
-        state["demand"]      / STATE_BOUNDS["demand"],
-        state["solar"]       / STATE_BOUNDS["solar"],
-        state["price"]       / STATE_BOUNDS["price"],
-        state["next_price"]  / STATE_BOUNDS["next_price"],
-        state["battery_soc"] / STATE_BOUNDS["battery_soc"],
-        state["hour"]        / STATE_BOUNDS["hour"],
+        state["demand"]            / STATE_BOUNDS["demand"],
+        state["solar"]             / STATE_BOUNDS["solar"],
+        state["price"]             / STATE_BOUNDS["price"],
+        state["next_price"]        / STATE_BOUNDS["next_price"],
+        state["next_demand"]       / STATE_BOUNDS["next_demand"],
+        state["next_solar"]        / STATE_BOUNDS["next_solar"],
+        state["battery_soc"]       / STATE_BOUNDS["battery_soc"],
+        state["hour"]              / STATE_BOUNDS["hour"],
+        state["day_of_week"]       / STATE_BOUNDS["day_of_week"],
+        np.clip(state["demand_delta"] / STATE_BOUNDS["demand_delta"], -1.0, 1.0),
+        state["next24_peak_demand"] / STATE_BOUNDS["next24_peak_demand"],
+        state["next24_peak_hour"]   / STATE_BOUNDS["next24_peak_hour"],
+        state["next24_avg_demand"]  / STATE_BOUNDS["next24_avg_demand"],
     ], dtype=np.float32)
 
 
-# ──────────────────────────────────────────────────────────────────────── #
-#  TRAIN FUNCTION (UPDATED)                                                #
-# ──────────────────────────────────────────────────────────────────────── #
-def train_agent():
+def load_data():
+    if USE_REAL_DATA:
+        return load_ashrae_data(n_days=N_DAYS_TRAIN, seed=DATA_SEED)
+    return generate_microgrid_data(n_days=N_DAYS_TRAIN, seed=DATA_SEED)
 
-    data  = generate_microgrid_data(n_days=60, seed=42)
+
+def main():
+    data  = load_data()
     env   = MicrogridEnv(data, shuffle_episodes=True)
-    agent = DQNAgent(state_dim=6, action_dim=4)
+    agent = DQNAgent(state_dim=STATE_DIM, action_dim=ACTION_DIM)
 
-    episodes      = 1500
-    reward_window = deque(maxlen=50)
-    cost_window   = deque(maxlen=50)
+    reward_window = deque(maxlen=REWARD_WINDOW)
+    cost_window   = deque(maxlen=REWARD_WINDOW)
     best_reward   = float("-inf")
 
-    projected = agent.epsilon * (agent.epsilon_decay ** episodes)
-    print(f"Epsilon: 1.0 -> {projected:.4f} over {episodes} episodes")
-    print(f"Dataset: {len(data)} rows ({data['day'].nunique()} days)\n")
-    print(f"{'Ep':>5} | {'Reward':>10} | {'AvgR50':>10} | {'Cost':>8} | {'e':>7} | {'Loss':>8}")
-    print("-" * 62)
+    source = "ASHRAE real data" if USE_REAL_DATA else "synthetic data"
+    print(f"Data source: {source}")
+    print(f"State dim  : {STATE_DIM}D")
+    print(f"Dataset    : {len(data)} rows ({data['day'].nunique()} days)\n")
+    print(f"{'Ep':>5} | {'Reward':>10} | {'AvgR50':>10} | {'Cost':>8} | {'Eps':>7} | {'Loss':>8}")
+    print("-" * 64)
 
-    for ep in range(episodes):
+    for ep in range(EPISODES):
         state        = state_to_vector(env.reset())
         total_reward = 0.0
         total_cost   = 0.0
@@ -71,16 +79,16 @@ def train_agent():
         while not done:
             action                         = agent.choose_action(state)
             next_state, reward, done, info = env.step(action)
-            next_state                     = state_to_vector(next_state)
+            next_vec                       = state_to_vector(next_state)
 
-            agent.remember(state, action, reward, next_state, done)
+            agent.remember(state, action, reward, next_vec, done)
             loss = agent.train()
             if loss is not None:
                 losses.append(loss)
 
-            state         = next_state
+            state         = next_vec
             total_reward += reward
-            total_cost   += info.get("cost", 0.0)
+            total_cost   += info["cost"]
 
         agent.decay_epsilon()
 
@@ -94,7 +102,7 @@ def train_agent():
             best_reward = total_reward
             marker = " *"
 
-        if (ep + 1) % 5 == 0:
+        if (ep + 1) % LOG_FREQ == 0:
             print(
                 f"{ep+1:>5} | "
                 f"{total_reward:>10.2f} | "
@@ -105,29 +113,20 @@ def train_agent():
                 f"{marker}"
             )
 
-        if (ep + 1) % 100 == 0:
-            torch.save(agent.model.state_dict(), f"checkpoint_ep{ep+1}.pth")
-            print(f"  Checkpoint saved -> checkpoint_ep{ep+1}.pth")
+        if (ep + 1) % CHECKPOINT_FREQ == 0:
+            ckpt = f"checkpoint_ep{ep+1}.pth"
+            torch.save(agent.model.state_dict(), ckpt)
+            print(f"  Checkpoint -> {ckpt}")
 
-        if ep > 100 and (ep + 1) % 100 == 0:
+        if ep > 100 and (ep + 1) % CHECKPOINT_FREQ == 0:
             w = list(reward_window)
-            if abs(np.mean(w[25:]) - np.mean(w[:25])) < 0.5:
+            if len(w) >= 50 and abs(np.mean(w[25:]) - np.mean(w[:25])) < PLATEAU_THRESH:
                 print(f"  Warning: Plateau detected at ep {ep+1}")
 
     print(f"\nDone. Best reward: {best_reward:.2f}")
-
-    # 🔥 SAVE MODEL
-    model_path = "microgrid_dqn.pth"
-    torch.save(agent.model.state_dict(), model_path)
-
-    print(f"Model saved -> {model_path}")
-
-    # 🔥 RETURN FOR MAIN PIPELINE
-    return model_path
+    torch.save(agent.model.state_dict(), MODEL_PATH)
+    print(f"Model saved -> {MODEL_PATH}")
 
 
-# ──────────────────────────────────────────────────────────────────────── #
-#  RUN STANDALONE                                                          #
-# ──────────────────────────────────────────────────────────────────────── #
 if __name__ == "__main__":
-    train_agent()
+    main()
