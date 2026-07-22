@@ -1,11 +1,16 @@
 venv/
+.venv/
 __pycache__/
 *.pyc
 
+# large raw datasets — download separately (see README)
+dataset/
 data/raw/
 data/processed/
 
+# editor / tooling config
 .vscode/
+.claude/
 .ipynb_checkpoints/
 
 # model weights & checkpoints
