@@ -21,7 +21,6 @@ from config import (
     EMISSION_FACTOR, EMISSION_WEIGHT,
     PEAK_WEIGHT, WEAR_COST_PER_KWH, REWARD_SCALE,
     PEAK_HOURS_MORNING, PEAK_HOURS_EVENING,
-    SMART_PRICE_HIGH_THRESHOLD,
 )
 
 
@@ -40,6 +39,15 @@ class MicrogridEnv:
 
         self.prev_demand    = 0.0
         self.total_emission = 0.0
+
+        # Data-driven price thresholds (robust to any price scale —
+        # synthetic TOU or real market prices)
+        prices = self.full_data["price_per_kwh"]
+        self.price_low  = float(prices.quantile(0.25))
+        self.price_high = float(prices.quantile(0.75))
+
+        # Real hourly carbon intensity if present, else flat factor
+        self.has_hourly_carbon = "carbon_kg_kwh" in self.full_data.columns
 
     # ------------------------------------------------------------------ #
     @property
@@ -171,18 +179,20 @@ class MicrogridEnv:
             else:
                 next_price = price
 
-            if price <= SMART_PRICE_HIGH_THRESHOLD and next_price > price:
+            if price <= self.price_low and next_price > price:
                 headroom         = (self.soc_max_kwh - self.battery_energy) / CHARGE_EFF
                 grid_charge      = self._charge(min(MAX_CHARGE_RATE, headroom))
                 battery_charged += grid_charge
-            elif net_demand > 0 and price > SMART_PRICE_HIGH_THRESHOLD:
+            elif net_demand > 0 and price >= self.price_high:
                 battery_discharged = self._discharge(net_demand)
 
         # ── Energy balance ─────────────────────────────────────────── #
         grid_used       = max(0.0, net_demand - battery_discharged) + grid_charge
         curtailed_solar = max(0.0, excess_solar - max(0.0, battery_charged - grid_charge))
 
-        emission             = grid_used * EMISSION_FACTOR
+        # Real hourly grid carbon intensity when available
+        carbon_factor = float(row["carbon_kg_kwh"]) if self.has_hourly_carbon else EMISSION_FACTOR
+        emission             = grid_used * carbon_factor
         self.total_emission += emission
 
         # ── Reward: savings vs "do nothing" ───────────────────────── #
@@ -196,7 +206,7 @@ class MicrogridEnv:
         savings         = do_nothing_cost - actual_cost   # >0 when battery helped
 
         wear           = WEAR_COST_PER_KWH * (battery_charged + battery_discharged)
-        emission_delta = (grid_used - net_demand) * EMISSION_FACTOR  # >0 if we bought extra
+        emission_delta = (grid_used - net_demand) * carbon_factor  # >0 if we bought extra
 
         reward = (savings - wear - EMISSION_WEIGHT * emission_delta) / REWARD_SCALE
 

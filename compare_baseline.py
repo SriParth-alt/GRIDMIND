@@ -31,19 +31,21 @@ def state_to_vector(state: dict) -> np.ndarray:
     ], dtype=np.float32)
 
 
-def _baseline_action(state: dict) -> int:
+def _baseline_action(state: dict, price_low: float = 2.05, price_high: float = 3.49) -> int:
     """
-    Rule-based heuristic using price arbitrage:
-      - Price very cheap (night) + battery has room → charge from grid (action 1)
-      - Price expensive + battery available         → discharge (action 2)
-      - Otherwise                                   → idle (action 0)
+    Rule-based heuristic using price arbitrage. Thresholds default to the
+    25th/75th percentiles of real 2016 NYISO prices; callers with different
+    data should pass their own percentiles.
+      - Price cheap (bottom quartile) + battery has room → charge (action 1)
+      - Price expensive (top quartile) + battery charged → discharge (action 2)
+      - Otherwise                                        → idle (action 0)
     """
     net_demand = max(0.0, state["demand"] - state["solar"])
 
-    if state["price"] < 4.0 and state["battery_soc"] < 85:
-        return 1   # charge from cheap grid at night
+    if state["price"] <= price_low and state["battery_soc"] < 85:
+        return 1   # charge from cheap grid
 
-    if net_demand > 0 and state["price"] > 8.0 and state["battery_soc"] > 20:
+    if net_demand > 0 and state["price"] >= price_high and state["battery_soc"] > 20:
         return 2   # discharge when grid is expensive
 
     return 0       # idle — let grid cover demand
@@ -75,7 +77,7 @@ def run_baseline(n_days: int) -> tuple:
     done       = False
 
     while not done:
-        action                    = _baseline_action(state)
+        action = _baseline_action(state, env.price_low, env.price_high)
         next_state, _, done, info = env.step(action)
         total_cost               += info["cost"]
         state                     = next_state

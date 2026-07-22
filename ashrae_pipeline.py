@@ -113,22 +113,31 @@ def load_ashrae_data(
     building_ids: list = None,
     n_days: int = None,
     seed: int = 42,
+    real_inputs: bool = True,
 ) -> pd.DataFrame:
     """
     Returns a DataFrame with columns:
-      day, day_of_week, hour, predicted_load, solar_kw, price_per_kwh
+      day, day_of_week, hour, predicted_load, solar_kw, price_per_kwh,
+      carbon_kg_kwh (only when real_inputs=True)
 
-    Compatible as a drop-in replacement for generate_microgrid_data().
+    real_inputs=True (default) uses measured 2016 data for solar (NASA POWER,
+    NYC), prices (NYISO day-ahead LBMP), and hourly grid carbon intensity
+    (NYISO fuel mix). Set False to fall back to the modeled solar/pricing.
 
     Parameters
     ----------
     dataset_dir  : path to folder containing train.csv, weather_train.csv
     building_ids : list of building IDs to include (default: GOOD_BUILDINGS)
     n_days       : cap total days (None = use all available)
-    seed         : random seed for pricing variation
+    seed         : random seed for pricing variation (synthetic mode only)
     """
     if building_ids is None:
         building_ids = GOOD_BUILDINGS
+
+    real = None
+    if real_inputs:
+        from external_data import load_real_inputs
+        real = load_real_inputs()
 
     train   = pd.read_csv(f"{dataset_dir}/train.csv")
     weather = pd.read_csv(f"{dataset_dir}/weather_train.csv")
@@ -162,9 +171,17 @@ def load_ashrae_data(
         bdf["hour"]           = bdf["timestamp"].dt.hour
         bdf["day_of_week"]    = bdf["timestamp"].dt.dayofweek   # 0=Mon
 
-        # Add solar and pricing
-        bdf = _add_solar(bdf, weather)
-        bdf = _add_pricing(bdf, seed=seed + bid)
+        if real is not None:
+            # Merge measured solar / prices / carbon by calendar hour
+            bdf["month"]        = bdf["timestamp"].dt.month
+            bdf["day_of_month"] = bdf["timestamp"].dt.day
+            bdf = bdf.merge(real, on=["month", "day_of_month", "hour"], how="left")
+            for col in ("solar_kw", "price_per_kwh", "carbon_kg_kwh"):
+                bdf[col] = bdf[col].ffill().bfill()
+            bdf.drop(columns=["month", "day_of_month"], inplace=True)
+        else:
+            bdf = _add_solar(bdf, weather)
+            bdf = _add_pricing(bdf, seed=seed + bid)
 
         # Assign sequential day numbers
         dates      = bdf["timestamp"].dt.date
@@ -177,8 +194,11 @@ def load_ashrae_data(
         bdf = bdf[dates.isin(unique_days)].copy()
         bdf["day"] = bdf["timestamp"].dt.date.map(day_map).astype("int32")
 
-        frames.append(bdf[["day", "day_of_week", "hour",
-                            "predicted_load", "solar_kw", "price_per_kwh"]])
+        cols = ["day", "day_of_week", "hour",
+                "predicted_load", "solar_kw", "price_per_kwh"]
+        if "carbon_kg_kwh" in bdf.columns:
+            cols.append("carbon_kg_kwh")
+        frames.append(bdf[cols])
 
     result = pd.concat(frames, ignore_index=True)
     result["day_of_week"] = result["day_of_week"].astype("int32")

@@ -21,8 +21,10 @@ EMISSION_FACTOR     = 0.82    # kg CO2 per kWh from grid
 # reward = (cost avoided vs do-nothing) - battery wear - emission penalty
 EMISSION_WEIGHT     = 0.5     # relative weight of CO2 vs cost
 PEAK_WEIGHT         = 0.8     # peak-hour grid price multiplier (1 + this)
-WEAR_COST_PER_KWH   = 0.5     # $/kWh cycled — battery degradation cost
-REWARD_SCALE        = 1000.0  # max savings per step ~ MAX_DISCHARGE * price ~ 1400
+WEAR_COST_PER_KWH   = 0.15    # ¢/kWh cycled — light degradation cost; real
+                              # wholesale spreads are thin, so heavy wear
+                              # makes all arbitrage unprofitable
+REWARD_SCALE        = 500.0   # max savings per step ~ MAX_DISCHARGE * price
 
 # Legacy weights kept for reference (no longer used by the env)
 MISSED_SOLAR_WEIGHT = 0.6
@@ -43,8 +45,8 @@ SMART_PRICE_HIGH_THRESHOLD   = 7.0   # $/kWh — discharge only if price > this
 STATE_BOUNDS = {
     "demand":            600.0,  # kW  — raised to cover real building demand
     "solar":             160.0,  # kW
-    "price":              25.0,  # $/kWh
-    "next_price":         25.0,  # $/kWh
+    "price":              15.0,  # ¢/kWh — covers real NYISO spikes (max ~14.2)
+    "next_price":         15.0,  # ¢/kWh
     "next_demand":       600.0,  # kW  — 1-step-ahead demand forecast
     "next_solar":        160.0,  # kW  — 1-step-ahead solar forecast
     "battery_soc":       100.0,  # %
