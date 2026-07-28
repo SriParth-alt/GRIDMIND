@@ -1,4 +1,4 @@
-# SUSTAIN_AI ⚡ — Deep-RL Microgrid Energy Optimization
+# GRIDMING ⚡ — Deep-RL Microgrid Energy Optimization
 
 A reinforcement-learning agent that manages the energy flow of a building microgrid —
 deciding every hour whether to draw from the grid, charge or discharge a battery, or
