@@ -57,9 +57,15 @@ _agent = None
 def get_agent() -> DQNAgent:
     global _agent
     if _agent is None:
+        model_file = ROOT / MODEL_PATH
+        if not model_file.exists():
+            raise FileNotFoundError(
+                f"Trained model not found at {model_file}. "
+                "Run 'python train_agent.py' first to train the agent."
+            )
         agent = DQNAgent(STATE_DIM, ACTION_DIM)
         agent.model.load_state_dict(
-            torch.load(ROOT / MODEL_PATH, map_location="cpu", weights_only=True)
+            torch.load(model_file, map_location="cpu", weights_only=True)
         )
         agent.model.eval()
         agent.epsilon = 0.0
