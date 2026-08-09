@@ -12,9 +12,15 @@ Differences from the old ashrae_loader.py:
   - Fills demand gaps by interpolation rather than dropping rows
 """
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
+
+# Simulation-ready data (~1 MB) committed to the repo so clones and deployments
+# never need the 700 MB raw dataset. Regenerate: python ashrae_pipeline.py --rebuild
+PRECOMPUTED_PATH = Path(__file__).resolve().parent / "data" / "simulation_data.csv"
 
 # Buildings at site 0 with full-year electricity data and <5% zeros
 GOOD_BUILDINGS = [105, 107, 108]
@@ -108,32 +114,17 @@ def _add_pricing(df: pd.DataFrame, seed: int = 42) -> pd.DataFrame:
 #  Main loader                                                                 #
 # ─────────────────────────────────────────────────────────────────────────── #
 
-def load_ashrae_data(
-    dataset_dir: str = "dataset",
-    building_ids: list = None,
-    n_days: int = None,
-    seed: int = 42,
-    real_inputs: bool = True,
+def _build_from_raw(
+    dataset_dir: str,
+    building_ids: list,
+    n_days: int,
+    seed: int,
+    real_inputs: bool,
 ) -> pd.DataFrame:
     """
-    Returns a DataFrame with columns:
-      day, day_of_week, hour, predicted_load, solar_kw, price_per_kwh,
-      carbon_kg_kwh (only when real_inputs=True)
-
-    real_inputs=True (default) uses measured 2016 data for solar (NASA POWER,
-    NYC), prices (NYISO day-ahead LBMP), and hourly grid carbon intensity
-    (NYISO fuel mix). Set False to fall back to the modeled solar/pricing.
-
-    Parameters
-    ----------
-    dataset_dir  : path to folder containing train.csv, weather_train.csv
-    building_ids : list of building IDs to include (default: GOOD_BUILDINGS)
-    n_days       : cap total days (None = use all available)
-    seed         : random seed for pricing variation (synthetic mode only)
+    Build simulation data from the raw ASHRAE dataset (~700 MB).
+    Only needed when regenerating the cache — see build_cache().
     """
-    if building_ids is None:
-        building_ids = GOOD_BUILDINGS
-
     real = None
     if real_inputs:
         from external_data import load_real_inputs
@@ -194,7 +185,8 @@ def load_ashrae_data(
         bdf = bdf[dates.isin(unique_days)].copy()
         bdf["day"] = bdf["timestamp"].dt.date.map(day_map).astype("int32")
 
-        cols = ["day", "day_of_week", "hour",
+        bdf["building_id"] = bid
+        cols = ["building_id", "day", "day_of_week", "hour",
                 "predicted_load", "solar_kw", "price_per_kwh"]
         if "carbon_kg_kwh" in bdf.columns:
             cols.append("carbon_kg_kwh")
@@ -205,13 +197,96 @@ def load_ashrae_data(
     result["hour"]        = result["hour"].astype("int32")
 
     total_days = result["day"].nunique()
-    print(f"[ashrae_pipeline] Loaded {len(result)} rows — "
+    print(f"[ashrae_pipeline] Built {len(result)} rows from raw ASHRAE — "
           f"{total_days} days from buildings {building_ids}")
     return result
 
 
+# ─────────────────────────────────────────────────────────────────────────── #
+#  Precomputed cache — what deployments and fresh clones actually use
+# ─────────────────────────────────────────────────────────────────────────── #
+
+def _slice_precomputed(df: pd.DataFrame, building_ids: list, n_days: int) -> pd.DataFrame:
+    """Apply the same building / day filtering the raw builder does."""
+    df = df[df["building_id"].isin(building_ids)].copy()
+
+    frames, global_day = [], 0
+    for bid in building_ids:
+        bdf  = df[df["building_id"] == bid]
+        days = sorted(bdf["day"].unique())
+        if n_days is not None:
+            days = days[:n_days]
+        remap = {d: global_day + i for i, d in enumerate(days)}
+        global_day += len(days)
+
+        bdf = bdf[bdf["day"].isin(days)].copy()
+        bdf["day"] = bdf["day"].map(remap).astype("int32")
+        frames.append(bdf)
+
+    out = pd.concat(frames, ignore_index=True)
+    # Match the raw builder's dtypes exactly (CSV round-trip widens ints)
+    for col in ("day_of_week", "hour"):
+        out[col] = out[col].astype("int32")
+    return out
+
+
+def build_cache(dataset_dir: str = "dataset") -> pd.DataFrame:
+    """Rebuild the precomputed CSV from the raw ASHRAE dataset."""
+    df = _build_from_raw(dataset_dir=dataset_dir, building_ids=GOOD_BUILDINGS,
+                         n_days=None, seed=42, real_inputs=True)
+    PRECOMPUTED_PATH.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(PRECOMPUTED_PATH, index=False)
+    size_mb = PRECOMPUTED_PATH.stat().st_size / 1e6
+    print(f"[ashrae_pipeline] Cache written -> {PRECOMPUTED_PATH} ({size_mb:.1f} MB)")
+    return df
+
+
+def load_ashrae_data(
+    dataset_dir: str = "dataset",
+    building_ids: list = None,
+    n_days: int = None,
+    seed: int = 42,
+    real_inputs: bool = True,
+) -> pd.DataFrame:
+    """
+    Load simulation-ready microgrid data.
+
+    Uses the small precomputed cache (data/simulation_data.csv, ~1 MB) when it
+    exists, so clones and deployments run without the 700 MB raw ASHRAE dump.
+    Falls back to building from raw when the cache is absent or when synthetic
+    solar/pricing is requested (real_inputs=False).
+
+    Columns: building_id, day, day_of_week, hour, predicted_load, solar_kw,
+             price_per_kwh, carbon_kg_kwh
+
+    Parameters
+    ----------
+    dataset_dir  : folder holding train.csv / weather_train.csv (raw build only)
+    building_ids : buildings to include (default: GOOD_BUILDINGS)
+    n_days       : cap days per building (None = all available)
+    seed         : random seed for synthetic pricing (real_inputs=False only)
+    real_inputs  : use measured solar/price/carbon (see external_data.py)
+    """
+    if building_ids is None:
+        building_ids = GOOD_BUILDINGS
+
+    if real_inputs and PRECOMPUTED_PATH.exists():
+        df  = _slice_precomputed(pd.read_csv(PRECOMPUTED_PATH), building_ids, n_days)
+        print(f"[ashrae_pipeline] Loaded {len(df)} rows from cache — "
+              f"{df['day'].nunique()} days from buildings {building_ids}")
+        return df
+
+    return _build_from_raw(dataset_dir, building_ids, n_days, seed, real_inputs)
+
+
 if __name__ == "__main__":
-    df = load_ashrae_data()
+    import sys
+
+    if "--rebuild" in sys.argv:
+        df = build_cache()
+    else:
+        df = load_ashrae_data()
+
     print(df.head())
     print("\nDemand stats:")
     print(df["predicted_load"].describe())

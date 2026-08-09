@@ -1,0 +1,23 @@
+# Keep the build context small — the raw dataset is 700 MB and unused at runtime
+dataset/
+dataset_hidden/
+data/raw/
+data/processed/
+
+.git/
+.venv/
+venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+
+.claude/
+.vscode/
+docs/
+notebooks/
+
+checkpoint_ep*.pth
+lstm_model.pth
+*.save
+microgrid_results.png
+microgrid_data.csv

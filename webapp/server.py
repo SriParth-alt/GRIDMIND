@@ -185,3 +185,11 @@ async def simulate(ws: WebSocket):
 
 
 app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
+
+
+if __name__ == "__main__":
+    # Hosts (Hugging Face Spaces, Render, Fly) inject the port via $PORT
+    import os
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))

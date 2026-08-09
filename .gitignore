@@ -17,9 +17,11 @@ data/processed/
 *.pth
 *.save
 checkpoint_ep*.pth
-microgrid_dqn.pth
 lstm_model.pth
 lstm_scaler.save
+
+# ...except the trained agent (80 KB) — deployments serve it, they don't train
+!microgrid_dqn.pth
 
 # generated outputs
 microgrid_data.csv

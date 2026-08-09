@@ -45,22 +45,11 @@ real demand + solar + prices + carbon ──► MicrogridEnv (13D state) ──�
 
 ## Quick start
 
+Clone and run — **no dataset download required**. The repo ships the precomputed
+hourly simulation data (1 MB) and the trained agent (80 KB).
+
 ```bash
 pip install -r requirements.txt
-```
-
-**1. Get the data** — download the [ASHRAE Great Energy Predictor III dataset](https://www.kaggle.com/c/ashrae-energy-prediction/data)
-and place `train.csv`, `weather_train.csv`, `building_metadata.csv` in `dataset/`.
-
-**2. Train the agent** (~5–10 min on CPU):
-
-```bash
-python train_agent.py
-```
-
-**3. Launch the live dashboard:**
-
-```bash
 uvicorn webapp.server:app --port 8000
 ```
 
@@ -70,21 +59,46 @@ and the baseline hour-by-hour over WebSocket, with live cost/emissions compariso
 **Or run the terminal pipeline:**
 
 ```bash
-python main.py     # comparison, plots, and a 2-day demo
+python main.py           # comparison, plots, and a 2-day demo
+python train_agent.py    # retrain from scratch (~7 min CPU)
 ```
+
+### Working from the raw dataset
+
+Only needed to regenerate the cache — e.g. to add buildings or change the year.
+Download the [ASHRAE Great Energy Predictor III dataset](https://www.kaggle.com/c/ashrae-energy-prediction/data),
+place `train.csv` and `weather_train.csv` in `dataset/`, then:
+
+```bash
+python ashrae_pipeline.py --rebuild
+```
+
+## Deploy
+
+```bash
+docker build -t gridmind . && docker run -p 8000:7860 gridmind
+```
+
+The image is self-contained (CPU-only torch, binds `$PORT`) and runs as-is on
+Hugging Face Spaces, Render, or Fly.io — see [docs/DEPLOY.md](docs/DEPLOY.md).
 
 ## Project layout
 
 ```
 ├── agents/dqn_agent.py          # Dueling DQN + PER agent
 ├── environment/microgrid_env.py # Microgrid simulation (battery physics, reward)
-├── ashrae_pipeline.py           # Data loader: ASHRAE demand + real inputs
+├── ashrae_pipeline.py           # Data loader (cache-first) + --rebuild
 ├── external_data.py             # NASA / NYISO downloaders (solar, prices, carbon)
 ├── data_generator.py            # Synthetic data generator (for experiments)
 ├── config.py                    # Every hyperparameter in one place
 ├── train_agent.py               # Training loop
 ├── compare_baseline.py          # RL vs rule-based heuristic evaluation
 ├── main.py                      # Terminal pipeline entry point
+├── data/
+│   ├── simulation_data.csv      # Precomputed hourly inputs (1 MB) — shipped
+│   └── external/                # Measured NASA / NYISO series
+├── microgrid_dqn.pth            # Trained agent (80 KB) — shipped
+├── Dockerfile                   # Deployment image (CPU torch, $PORT)
 └── webapp/                      # FastAPI + WebSocket live dashboard
     ├── server.py
     └── static/index.html
